@@ -1,15 +1,14 @@
-# Shanghainese Local Bridge
+# OpenClaw 上海话语音输入插件 Shanghainese Local Bridge
 
-A local Shanghainese/Wu voice-input bridge for OpenClaw.
+OpenClaw Telegram 上海话语音输入插件。
 
-本插件为 OpenClaw 提供一个面向**上海话 / 沪语短语音**的本地语音转写与后处理链路。
+本插件用于将上海话 / 沪语短语音接入 OpenClaw，对语音内容进行本地转写，并输出更适合 agent 使用的普通话文本。
 
-当前设计目标不是“完美自动定稿”，而是先做到：
-- 本地 ASR 可用
-- 后处理可控
-- 用户确认可积累
-- 映射表可持续增强
-- 后续可演进到个人化适配 / 微调
+当前插件包含以下修正链路：
+- **自动纠偏**：对高频时间词、地名、口语表达进行基础修正
+- **个人词典**：将确认后的个人高频表达持续写入词典回灌
+- **规则映射**：使用映射表和规则型语序整理处理稳定模式
+- **LLM 修正**：在规则层仍不足时，按需做普通话化整理
 
 ## Installation
 
@@ -218,10 +217,54 @@ openclaw gateway status
 
 `debugVisibleAgents` 用来控制哪些 agent 会显示“确认稿”。
 
-- 在清单里的 agent，会看到确认稿
+推荐使用方式：
+- **第一次部署时，优先开启 debug 模式**
+- 先连续发送多条上海话日常用语，观察确认稿结果
+- 根据确认结果持续补充映射、规则和个人纠错词典
+- 当常用表达已经足够稳定后，再在配置里关闭 debug，进入日常静默使用
+
+行为说明：
+- 在清单里的 agent，会看到确认稿，适合做纠偏和调试
 - 不在清单里的 agent，默认静默
 - 静默模式下仍会使用插件整理后的 transcript 继续对话
+- 你也可以指定某一个或多个 agent 专门作为 debug agent 使用
 - 插件默认值是：`["main"]`
+
+示例 1，只让主 agent 进入 debug 模式：
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "shanghainese-local-bridge": {
+        "enabled": true,
+        "config": {
+          "debugVisibleAgents": ["main"]
+        }
+      }
+    }
+  }
+}
+```
+
+示例 2，让专门 agent 用于 debug：
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "shanghainese-local-bridge": {
+        "enabled": true,
+        "config": {
+          "debugVisibleAgents": ["main", "coder"]
+        }
+      }
+    }
+  }
+}
+```
+
+如果你想关闭 debug，可将清单改成不包含当前使用的 agent，或仅保留专门调试的 agent。
 
 ### 4.7 重启 OpenClaw
 
