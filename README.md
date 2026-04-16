@@ -36,58 +36,18 @@ openclaw gateway status
 
 ## 1. 功能概览
 
-当前链路：
-
 ```text
-Telegram/频道语音
+用户发送沪语语音
 -> message:transcribed
--> Fun-ASR-Nano-2512 本地常驻 worker
--> common-mappings.json 基础映射纠偏
--> correction-lexicon.json 个人纠偏词典回灌
--> clean_transcript.py 轻清洗
--> 输出确认稿给用户
--> 用户回复“确认”或直接给出正确文本
--> 自动写入 confirmed-transcripts.jsonl 并更新 correction-lexicon.json
+-> Fun-ASR-Nano-2512 常驻 worker
+-> 基础映射纠偏
+-> 个人词典回灌
+-> 轻清洗
+-> 规则型语序整理
+-> 必要时 LLM 普通话化
+-> 输出确认稿或静默写回 transcript
+-> 用户确认后自动写入数据文件
 ```
-
-流程图版本：
-
-```text
-[用户发送沪语语音]
-        |
-        v
-[OpenClaw message:transcribed]
-        |
-        v
-[Fun-ASR-Nano-2512 常驻 worker]
-        |
-        v
-[基础映射 common-mappings.json]
-        |
-        v
-[个人词典 correction-lexicon.json]
-        |
-        v
-[clean_transcript.py 轻清洗]
-        |
-        v
-[输出确认稿]
-        |
-        +----------------------+
-        |                      |
-        v                      v
-   [用户回复确认]         [用户直接改正文本]
-        |                      |
-        +----------+-----------+
-                   |
-                   v
-[自动写入 confirmed-transcripts.jsonl]
-                   |
-                   v
-[更新 correction-lexicon.json]
-```
-
-也就是说，这个插件现在是一个**确认式沪语语音纠偏插件**。
 
 ---
 
@@ -125,19 +85,6 @@ Telegram/频道语音
 ---
 
 ## Architecture
-
-当前推荐链路：
-
-```text
-本地 Fun-ASR-Nano-2512
--> 基础映射纠偏
--> 个人词典回灌纠偏
--> 轻清洗
--> 规则型语序整理
--> 必要时 LLM 普通话化
--> 用户确认
--> 确认结果回流数据文件
-```
 
 设计原则：
 - 规则优先，LLM 兜底
@@ -177,7 +124,6 @@ Telegram/频道语音
 
 ## 4. 快速部署
 
-
 ### 4.1 前置条件
 
 需要本机已具备：
@@ -196,27 +142,7 @@ python3 --version
 openclaw gateway status
 ```
 
-### 4.2 目录准备
-
-将插件放到：
-
-```text
-~/.openclaw/extensions/shanghainese-local-bridge/
-```
-
-并确保目录中至少包含：
-
-```text
-shanghainese-local-bridge/
-├── data/
-├── scripts/
-├── vendor/Fun-ASR/
-├── index.ts
-├── openclaw.plugin.json
-└── README.md
-```
-
-### 4.3 核心脚本
+### 4.2 核心脚本
 
 必须存在：
 - `scripts/local_asr_funasr_nano_repo.py`
@@ -225,7 +151,7 @@ shanghainese-local-bridge/
 - `scripts/clean_transcript.py`
 - `scripts/rewrite_shanghainese_order.py`
 
-### 4.4 启用插件
+### 4.3 启用插件
 
 在 OpenClaw 配置中确保插件在 allowlist 中：
 
@@ -239,7 +165,7 @@ shanghainese-local-bridge/
 }
 ```
 
-### 4.5 最小配置示例
+### 4.4 最小配置示例
 
 如果你只想先跑起来，建议先用这个最小可用配置：
 
@@ -262,7 +188,7 @@ shanghainese-local-bridge/
 }
 ```
 
-### 4.6 推荐配置示例
+### 4.5 推荐配置示例
 
 如果你要启用当前完整能力，建议使用：
 
@@ -288,34 +214,16 @@ shanghainese-local-bridge/
 }
 ```
 
-### 4.7 `debugVisibleAgents` 配置说明
+### 4.6 `debugVisibleAgents` 配置说明
 
 `debugVisibleAgents` 用来控制哪些 agent 会显示“确认稿”。
 
-例如：
-
-```json
-{
-  "plugins": {
-    "entries": {
-      "shanghainese-local-bridge": {
-        "enabled": true,
-        "config": {
-          "debugVisibleAgents": ["main"]
-        }
-      }
-    }
-  }
-}
-```
-
-行为说明：
 - 在清单里的 agent，会看到确认稿
 - 不在清单里的 agent，默认静默
 - 静默模式下仍会使用插件整理后的 transcript 继续对话
 - 插件默认值是：`["main"]`
 
-### 4.8 重启 OpenClaw
+### 4.7 重启 OpenClaw
 
 插件配置更新后重启：
 
@@ -323,7 +231,7 @@ shanghainese-local-bridge/
 openclaw gateway restart
 ```
 
-### 4.9 快速自检
+### 4.8 快速自检
 
 建议用一条短语音验证：
 
@@ -451,78 +359,17 @@ ASR原稿：明朝早朗向八点半。
 
 ---
 
-## 9. 当前限制
+## 9. Roadmap
 
-目前仍有这些限制：
-
-1. **沪语 ASR 仍不完美**
-   - 某些整句仍会严重误识别
-   - 例如整句语义跨度过大时，单靠字符串替换不够
-
-2. **映射表适合高频稳定模式**
-   - 不适合处理所有整句级复杂误识别
-
-3. **当前是确认式流程**
-   - 目标是“先可用”，不是“全自动无校对”
-
-4. **Nano 常驻占用较高内存**
-   - 约 5.5 GB RSS
-
----
-
-## 10. 推荐运维策略
-
-### 推荐
-- 让 Nano worker 常驻
-- 持续积累确认样本
-- 优先扩充：
-  - 时间表达
-  - 地名
-  - 高频口语词
-
-### 不推荐
-- 过早追求全自动无确认
-- 对整句级复杂误识别做大规模硬替换
-- 把低置信度长句直接写死为全局规则
-
----
-
-## 11. 后续可扩展方向
-
-### 11.1 更强映射层
-- 按类别拆分：
-  - `time-mapping.json`
-  - `location-mapping.json`
-  - `phrase-level-examples.jsonl`
-
-### 11.2 个人化纠偏增强
-- 按确认次数提升规则优先级
-- 增加地名 / 时间 / 口语分层策略
-- 引入置信度和替换条件
-
-### 11.3 微调数据导出
-- 从 `confirmed-transcripts.jsonl` 导出训练 manifest
-- 形成真正可复用的个人语音数据集
-
-### 11.4 更深层 ASR 服务化
-- 将 worker 做成系统服务
-- 增加健康检查、自动拉起、超时恢复
-- 支持并发请求与缓存
-
----
-
-## Roadmap
-
-后续建议演进方向：
 - 继续扩充高频上海话时间/地点/饭点/口语映射
 - 增强规则型语序整理，减少 LLM 触发率
 - 增加 phrase-level 模式，而不只是字符串替换
 - 积累更多确认样本，支持后续统计分析和可能的个性化训练
 - 将 worker 做成更稳定的守护式服务
 
-## 12. 故障排查
+## 10. 故障排查
 
-### 12.1 worker 拉不起来
+### 10.1 worker 拉不起来
 先看：
 
 ```bash
@@ -535,7 +382,7 @@ cat ~/.openclaw/extensions/shanghainese-local-bridge/data/funasr-nano-worker.log
 - `tiktoken` / `openai-whisper` 未安装
 - `ffmpeg` 路径未带入 worker 环境
 
-### 12.2 模型找不到
+### 10.2 模型找不到
 检查目录：
 
 ```bash
@@ -544,14 +391,14 @@ ls ~/.cache/modelscope/hub/models/FunAudioLLM/Fun-ASR-Nano-2512
 
 如果没有，说明模型还没下载完成，或当前运行用户无权限访问缓存目录。
 
-### 12.3 转写仍然很慢
+### 10.3 转写仍然很慢
 如果单条又回到 30 秒以上，通常说明没有走常驻 worker，而是退回了 direct-repo 模式。
 
 可检查 wrapper 输出中的：
 - `mode: persistent-worker`
 - 如果不是这个值，说明 worker 未被成功复用
 
-### 12.4 ffmpeg 相关报错
+### 10.4 ffmpeg 相关报错
 当前方案依赖 venv 内的 ffmpeg 路径：
 
 ```text
@@ -562,7 +409,7 @@ ls ~/.cache/modelscope/hub/models/FunAudioLLM/Fun-ASR-Nano-2512
 - `imageio-ffmpeg` 已安装
 - venv 内 ffmpeg 入口存在
 
-### 12.5 规则明明录入了却没命中
+### 10.5 规则明明录入了却没命中
 检查两个文件：
 
 ```bash
@@ -575,7 +422,7 @@ cat ~/.openclaw/extensions/shanghainese-local-bridge/data/correction-lexicon.jso
 - 当前是整句级误识别，不适合做简单字符串替换
 - 新规则虽然已确认，但还没有形成稳定短词映射
 
-### 12.6 用户确认没有自动入库
+### 10.6 用户确认没有自动入库
 检查：
 - 插件是否已加载 `message:received` hook
 - 回复是否发生在待确认有效期内
@@ -587,77 +434,3 @@ cat ~/.openclaw/extensions/shanghainese-local-bridge/data/correction-lexicon.jso
 cat ~/.openclaw/extensions/shanghainese-local-bridge/data/pending-confirmations.json
 cat ~/.openclaw/extensions/shanghainese-local-bridge/data/confirmed-transcripts.jsonl
 ```
-
-## 13. 插件与 Skill 的职责边界
-
-为了避免后续能力越做越混，推荐明确分工如下。
-
-### 13.1 插件负责什么
-插件负责**实时在线链路**，也就是用户发来语音后立刻发生的事情：
-
-- 接收 `message:transcribed` / `message:received` 事件
-- 调用本地 Fun-ASR-Nano 常驻 worker
-- 执行映射表纠偏
-- 执行个人词典回灌
-- 执行轻清洗
-- 执行规则型语序整理
-- 可选执行 LLM 普通话化
-- 输出确认稿
-- 自动记录用户确认结果
-
-一句话说，插件负责：
-
-**在线、实时、面向用户会话的沪语语音输入处理。**
-
-### 13.2 Skill 负责什么
-Skill 不负责实时接管消息链路，而更适合负责：
-
-- 部署说明
-- 架构说明
-- 调试说明
-- 离线脚本入口
-- 批量语料处理
-- 训练数据整理
-- 评测与对比实验
-- 参考样例沉淀
-
-一句话说，Skill 负责：
-
-**说明、复用、离线处理、开发辅助。**
-
-### 13.3 当前推荐架构
-当前推荐保持：
-
-- **插件** 作为正式语音输入入口
-- **Skill** 作为配套说明和离线工具层
-
-不要让 Skill 承担实时对话链路，也不要把所有批处理/实验逻辑都塞进插件。
-
-### 13.4 为什么这样分工
-这样做有几个直接好处：
-
-1. **实时链路更稳定**
-   - 插件只做在线必要动作
-
-2. **离线能力更容易迭代**
-   - Skill 可以继续扩展脚本、文档和实验流程
-
-3. **维护成本更低**
-   - 出问题时能快速判断是“线上插件问题”还是“离线工具问题”
-
-4. **便于后续复用**
-   - 以后如果要把这套上海话处理能力迁移到别的 agent / 别的项目，Skill 层更容易复用
-
-### 13.5 结论
-对于这个项目，建议长期坚持这条边界：
-
-- **插件 = 正式在线输入链路**
-- **Skill = 文档、脚本、批处理、开发辅助**
-
-## 14. 一句话总结
-
-`Shanghainese Local Bridge` 不是一个“单次转写脚本”，而是一条可持续成长的沪语短语音处理链：
-
-**本地 Nano ASR + 常驻提速 + 映射表纠偏 + 用户确认回流 + 个性化积累**
-
-它的优势不只是“能转写”，而是**越用越懂你**。
