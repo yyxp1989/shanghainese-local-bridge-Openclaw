@@ -18,6 +18,11 @@
         "type": "array",
         "items": { "type": "string" },
         "default": ["main"]
+      },
+      "enabledAgents": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": ["main", "coder", "bazi"]
       }
     }
   }

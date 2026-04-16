@@ -15,6 +15,7 @@ const DEFAULT_REWRITE_SCRIPT = path.join(PLUGIN_DIR, 'scripts', 'rewrite_shangha
 const DEFAULT_LLM_NORMALIZE_ENABLED = true;
 const DEFAULT_LLM_TIMEOUT_MS = 20000;
 const DEFAULT_DEBUG_VISIBLE_AGENTS = ['main'];
+const DEFAULT_ENABLED_AGENTS = ['main', 'coder', 'bazi'];
 const FUNASR_BIN = path.join(HOME_DIR, '.openclaw', 'venvs', 'funasr', 'bin');
 const ADAPTATION_DIR = path.join(PLUGIN_DIR, 'data');
 const CONFIRMED_JSONL = path.join(ADAPTATION_DIR, 'confirmed-transcripts.jsonl');
@@ -166,14 +167,41 @@ function resolveAgentIdFromSessionKey(sessionKey: string): string | undefined {
   return m?.[1] || undefined;
 }
 
+function normalizeAgentList(values: string[] | undefined, fallback: string[]): string[] {
+  return Array.isArray(values) && values.length
+    ? values.map((v) => String(v || '').trim()).filter(Boolean)
+    : fallback;
+}
+
 function shouldShowConfirmationDraft(event: any, debugVisibleAgents?: string[]): boolean {
-  const visibleAgents = Array.isArray(debugVisibleAgents) && debugVisibleAgents.length
-    ? debugVisibleAgents.map((v) => String(v || '').trim()).filter(Boolean)
-    : DEFAULT_DEBUG_VISIBLE_AGENTS;
+  const visibleAgents = normalizeAgentList(debugVisibleAgents, DEFAULT_DEBUG_VISIBLE_AGENTS);
   const sessionKey = String(event?.sessionKey || '');
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
   if (!agentId) return true;
   return visibleAgents.includes(agentId);
+}
+
+function isPluginEnabledForAgent(event: any, enabledAgents?: string[]): boolean {
+  const targetAgents = normalizeAgentList(enabledAgents, DEFAULT_ENABLED_AGENTS);
+  const sessionKey = String(event?.sessionKey || '');
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  if (!agentId) return true;
+  return targetAgents.includes(agentId);
+}
+
+function buildAgentTranscriptBody(text: string): string {
+  return [
+    '以下内容是插件已经整理后的语音转写结果。',
+    '请直接基于这段文本理解用户意图，不要再次调用 ASR / Whisper / Faster-Whisper / 其他语音识别流程重跑转写。',
+    '',
+    text,
+  ].join('\n');
+}
+
+function extractAudioPathFromPrompt(prompt: string): string | undefined {
+  const text = String(prompt || '');
+  const m = text.match(/\/home\/yy\/\.openclaw\/media\/inbound\/[^\s\]\)"']+\.(?:ogg|opus|mp3|wav|m4a|aac|flac|mp4|webm)\b/i);
+  return m?.[0];
 }
 
 async function ensureAdaptationDir(): Promise<void> {
@@ -306,6 +334,11 @@ export default definePluginEntry({
         const debugVisibleAgents = Array.isArray(pluginCfg?.debugVisibleAgents)
           ? pluginCfg.debugVisibleAgents
           : DEFAULT_DEBUG_VISIBLE_AGENTS;
+        const enabledAgents = Array.isArray(pluginCfg?.enabledAgents)
+          ? pluginCfg.enabledAgents
+          : DEFAULT_ENABLED_AGENTS;
+
+        if (!isPluginEnabledForAgent(event, enabledAgents)) return;
 
         const localTranscript = await transcribeLocally(
           mediaPath,
@@ -372,6 +405,100 @@ export default definePluginEntry({
     }, {
       name: 'shanghainese-local-bridge.message-transcribed',
       description: 'Prefer local FunASR Paraformer and normalize the transcript through an embedded agent turn.',
+    });
+
+    api.registerHook('message:preprocessed', async (event: any) => {
+      try {
+        if (event?.type !== 'message' || event?.action !== 'preprocessed') return;
+        const pluginCfg = api.config?.plugins?.entries?.['shanghainese-local-bridge']?.config || {};
+        if (pluginCfg?.enabled === false) return;
+        const enabledAgents = Array.isArray(pluginCfg?.enabledAgents)
+          ? pluginCfg.enabledAgents
+          : DEFAULT_ENABLED_AGENTS;
+        if (!isPluginEnabledForAgent(event, enabledAgents)) return;
+
+        const channelId = String(event?.context?.channelId || '');
+        const from = String(event?.context?.from || '');
+        const mediaPath = String(event?.context?.mediaPath || '');
+        const bodyForAgent = String(event?.context?.bodyForAgent || '');
+
+        const pending = await loadPendingMap();
+        const current = pending[buildPendingKey(channelId, from)];
+        if (!current) return;
+
+        const ageMs = Date.now() - new Date(current.createdAt).getTime();
+        if (!Number.isFinite(ageMs) || ageMs > 10 * 60 * 1000) return;
+
+        const suggestedText = String(current.suggestedText || '').trim();
+        if (!suggestedText) return;
+
+        const isAudio = isAudioMediaPath(mediaPath) || /<media:audio>|audio\/ogg|\.ogg\b|\.opus\b/i.test(bodyForAgent);
+        if (!isAudio && bodyForAgent && bodyForAgent.includes(suggestedText)) return;
+
+        const injectedBody = buildAgentTranscriptBody(suggestedText);
+        event.context.bodyForAgent = injectedBody;
+        event.context.transcript = suggestedText;
+        event.context.body = injectedBody;
+        event.context.content = injectedBody;
+        event.context.text = injectedBody;
+      } catch {
+        return;
+      }
+    }, {
+      name: 'shanghainese-local-bridge.message-preprocessed-transcript-priority',
+      description: 'Promote plugin-normalized transcript into bodyForAgent so downstream agents use it instead of rerunning ASR.',
+    });
+
+    api.on('before_prompt_build', async (event: any, ctx: any) => {
+      try {
+        const pluginCfg = api.config?.plugins?.entries?.['shanghainese-local-bridge']?.config || {};
+        if (pluginCfg?.enabled === false) return;
+        const enabledAgents = Array.isArray(pluginCfg?.enabledAgents)
+          ? pluginCfg.enabledAgents
+          : DEFAULT_ENABLED_AGENTS;
+        if (!isPluginEnabledForAgent({ sessionKey: ctx?.sessionKey }, enabledAgents)) return;
+
+        const sessionKey = String(ctx?.sessionKey || '');
+        const channelId = sessionKey.includes(':telegram:') ? 'telegram' : '';
+        const from = sessionKey.split(':').pop() || '';
+        const promptText = String(event?.prompt || '');
+        const mediaPath = extractAudioPathFromPrompt(promptText);
+        if (!channelId || !from || !mediaPath || !isAudioMediaPath(mediaPath)) return;
+
+        const pythonPath = String(pluginCfg?.pythonPath || DEFAULT_PYTHON);
+        const nanoRepoScript = String(pluginCfg?.nanoRepoScript || DEFAULT_NANO_REPO_SCRIPT);
+        const cleanScript = String(pluginCfg?.cleanScript || DEFAULT_CLEAN_SCRIPT);
+        const rewriteScript = String(pluginCfg?.rewriteScript || DEFAULT_REWRITE_SCRIPT);
+        const llmNormalizeEnabled = pluginCfg?.llmNormalizeEnabled ?? DEFAULT_LLM_NORMALIZE_ENABLED;
+        const llmNormalizeModel = String(pluginCfg?.llmNormalizeModel || '').trim();
+        const llmNormalizeTimeoutMs = Number(pluginCfg?.llmNormalizeTimeoutMs || DEFAULT_LLM_TIMEOUT_MS);
+
+        const transcript = await transcribeLocally(mediaPath, pythonPath, nanoRepoScript);
+        if (!transcript) return;
+
+        const correctedTranscript = await applyCorrectionLexicon(transcript);
+        const cleaned = await cleanTranscript(correctedTranscript, cleanScript);
+        const rewritten = await rewriteTranscriptOrder(cleaned, rewriteScript);
+        const baseSuggested = rewritten || cleaned || correctedTranscript || transcript;
+        const llmNormalized = llmNormalizeEnabled
+          && shouldUseLlmNormalization(transcript, correctedTranscript, cleaned, rewritten)
+          ? await llmNormalizeTranscript(api, {
+            transcript,
+            normalizedDraft: baseSuggested,
+            channelId,
+            from,
+            timeoutMs: llmNormalizeTimeoutMs,
+            ...(llmNormalizeModel ? { model: llmNormalizeModel } : {}),
+          })
+          : '';
+        const suggestedText = llmNormalized || baseSuggested;
+
+        return {
+          prependContext: buildAgentTranscriptBody(suggestedText),
+        };
+      } catch {
+        return;
+      }
     });
 
     api.registerHook('message:received', async (event: any) => {

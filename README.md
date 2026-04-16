@@ -37,14 +37,16 @@ openclaw gateway status
 
 ```text
 用户发送沪语语音
--> message:transcribed
--> Fun-ASR-Nano-2512 常驻 worker
+-> agent 进入 before_prompt_build
+-> 从本轮 prompt 直接提取音频路径
+-> Fun-ASR-Nano-2512 常驻 worker 本地转写
 -> 基础映射纠偏
 -> 个人词典回灌
 -> 轻清洗
 -> 规则型语序整理
 -> 必要时 LLM 普通话化
--> 输出确认稿或静默写回 transcript
+-> 将整理稿直接注入 agent prompt
+-> debug agent 可看到确认稿
 -> 用户确认后自动写入数据文件
 ```
 
@@ -80,6 +82,17 @@ openclaw gateway status
 - 短时沪语表达
 - 时间、地点、日常口语
 - 需要边用边积累纠偏能力的场景
+
+### 2.6 agent 侧真实生效链路
+当前稳定实现不是依赖 `message:transcribed` 事件回写正文，而是：
+- 在 `before_prompt_build` 阶段直接从本轮 prompt 提取音频路径
+- 现场完成本地转写与整理
+- 再把整理稿直接 prepend 到 agent prompt
+
+这意味着：
+- 下游 agent 不需要自己再跑 ASR
+- 即使原始消息正文仍包含 `<media:audio>` 占位，agent 也会优先看到插件整理稿
+- 对像 bazi 这种容易自行尝试转写的 agent，更稳定
 
 ---
 
@@ -280,8 +293,9 @@ openclaw gateway restart
 
 1. 发送一条上海话语音
 2. 检查是否成功触发本地 ASR
-3. 检查是否输出确认稿或静默写回 transcript
-4. 回复“确认”，检查是否写入：
+3. 检查 agent 是否直接基于整理稿回复，而不是自行再次转写
+4. 如果当前 agent 在 `debugVisibleAgents` 清单中，检查是否输出确认稿
+5. 回复“确认”，检查是否写入：
    - `data/confirmed-transcripts.jsonl`
    - `data/correction-lexicon.json`
 
@@ -290,7 +304,9 @@ openclaw gateway restart
 ## 5. 使用方式
 
 ### 5.1 正常使用流程
-用户发送一条沪语语音后，插件会返回类似：
+用户发送一条沪语语音后，插件会先在 `before_prompt_build` 阶段把整理稿注入给 agent。
+
+如果当前 agent 在 `debugVisibleAgents` 清单中，插件还会返回类似：
 
 ```text
 【沪语语音确认稿｜本地fun-asr-nano-repo+mapping】
@@ -477,3 +493,15 @@ cat ~/.openclaw/extensions/shanghainese-local-bridge/data/correction-lexicon.jso
 cat ~/.openclaw/extensions/shanghainese-local-bridge/data/pending-confirmations.json
 cat ~/.openclaw/extensions/shanghainese-local-bridge/data/confirmed-transcripts.jsonl
 ```
+
+### 10.7 agent 仍然说“没看到文字映射”
+当前版本的稳定链路应当是：
+- `before_prompt_build` 直接从 prompt 提取音频路径
+- 本地转写
+- 将整理稿直接注入 prompt
+
+如果 agent 仍然说没看到文字，优先检查：
+- 当前 agent 是否在 `enabledAgents` 清单中
+- `pythonPath` / `nanoRepoScript` / `cleanScript` / `rewriteScript` 是否可执行
+- 该条消息 prompt 中是否包含可提取的本地音频路径
+- 本地 Nano worker 是否正常工作
