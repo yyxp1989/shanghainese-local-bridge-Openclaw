@@ -83,16 +83,16 @@ openclaw gateway status
 - 时间、地点、日常口语
 - 需要边用边积累纠偏能力的场景
 
-### 2.6 agent 侧真实生效链路
+### 2.6 prompt 构建阶段直连注入
 当前稳定实现不是依赖 `message:transcribed` 事件回写正文，而是：
 - 在 `before_prompt_build` 阶段直接从本轮 prompt 提取音频路径
 - 现场完成本地转写与整理
-- 再把整理稿直接 prepend 到 agent prompt
+- 再把整理稿直接 prepend 到 prompt
 
 这意味着：
-- 下游 agent 不需要自己再跑 ASR
-- 即使原始消息正文仍包含 `<media:audio>` 占位，agent 也会优先看到插件整理稿
-- 对像 bazi 这种容易自行尝试转写的 agent，更稳定
+- 即使原始消息正文仍包含 `<media:audio>` 占位，上下文中也能优先拿到整理稿
+- 减少对消息时序和内部事件回写链的依赖
+- 对需要稳定消费短语音文本的场景更稳
 
 ---
 
@@ -293,7 +293,7 @@ openclaw gateway restart
 
 1. 发送一条上海话语音
 2. 检查是否成功触发本地 ASR
-3. 检查 agent 是否直接基于整理稿回复，而不是自行再次转写
+3. 检查回复是否已经基于整理稿进行理解
 4. 如果当前 agent 在 `debugVisibleAgents` 清单中，检查是否输出确认稿
 5. 回复“确认”，检查是否写入：
    - `data/confirmed-transcripts.jsonl`
@@ -494,14 +494,14 @@ cat ~/.openclaw/extensions/shanghainese-local-bridge/data/pending-confirmations.
 cat ~/.openclaw/extensions/shanghainese-local-bridge/data/confirmed-transcripts.jsonl
 ```
 
-### 10.7 agent 仍然说“没看到文字映射”
+### 10.7 语音整理稿未进入上下文
 当前版本的稳定链路应当是：
 - `before_prompt_build` 直接从 prompt 提取音频路径
 - 本地转写
 - 将整理稿直接注入 prompt
 
-如果 agent 仍然说没看到文字，优先检查：
-- 当前 agent 是否在 `enabledAgents` 清单中
+如果整理稿仍未进入上下文，优先检查：
+- 当前目标是否在 `enabledAgents` 清单中
 - `pythonPath` / `nanoRepoScript` / `cleanScript` / `rewriteScript` 是否可执行
 - 该条消息 prompt 中是否包含可提取的本地音频路径
 - 本地 Nano worker 是否正常工作
