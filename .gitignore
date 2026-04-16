@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+node_modules/
+
+# runtime state
+/data/funasr-nano-worker.log
+/data/pending-confirmations.json
+/data/confirmed-transcripts.jsonl
+/data/correction-lexicon.json
+
+# local temp files
+.DS_Store

@@ -1,0 +1,11 @@
+{
+  "name": "shanghainese-local-bridge",
+  "version": "0.1.0",
+  "description": "OpenClaw native plugin prototype for local Shanghainese ASR bridge",
+  "type": "module",
+  "main": "index.ts",
+  "license": "MIT",
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}

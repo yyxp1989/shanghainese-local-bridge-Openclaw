@@ -1,0 +1,24 @@
+{
+  "id": "shanghainese-local-bridge",
+  "name": "Shanghainese Local Bridge",
+  "description": "Prefer local FunASR Paraformer for transcribed voice notes, then normalize through an embedded agent turn.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean", "default": true },
+      "pythonPath": { "type": "string" },
+      "nanoRepoScript": { "type": "string" },
+      "cleanScript": { "type": "string" },
+      "rewriteScript": { "type": "string" },
+      "llmNormalizeEnabled": { "type": "boolean" },
+      "llmNormalizeModel": { "type": "string" },
+      "llmNormalizeTimeoutMs": { "type": "number" },
+      "debugVisibleAgents": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": ["main"]
+      }
+    }
+  }
+}
