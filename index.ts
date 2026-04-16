@@ -22,9 +22,19 @@ const CONFIRMED_JSONL = path.join(ADAPTATION_DIR, 'confirmed-transcripts.jsonl')
 const LEXICON_JSON = path.join(ADAPTATION_DIR, 'correction-lexicon.json');
 const COMMON_MAPPINGS_JSON = path.join(ADAPTATION_DIR, 'common-mappings.json');
 const PENDING_JSON = path.join(ADAPTATION_DIR, 'pending-confirmations.json');
+const FAILURE_LOG = path.join(ADAPTATION_DIR, 'injection-failures.log');
 
 function isAudioMediaPath(mediaPath: string): boolean {
   return /\.(ogg|opus|mp3|wav|m4a|aac|flac|mp4|webm)$/i.test(mediaPath);
+}
+
+async function appendFailureLog(kind: string, payload: Record<string, unknown>): Promise<void> {
+  try {
+    await ensureAdaptationDir();
+    await appendFile(FAILURE_LOG, `${JSON.stringify({ ts: new Date().toISOString(), kind, ...payload })}\n`, 'utf8');
+  } catch {
+    return;
+  }
 }
 
 async function transcribeLocally(
@@ -33,7 +43,8 @@ async function transcribeLocally(
   nanoRepoScript: string,
 ): Promise<string | undefined> {
   if (!mediaPath || !isAudioMediaPath(mediaPath)) return undefined;
-  try {
+
+  const runOnce = async () => {
     const { stdout } = await execFileAsync(
       pythonPath,
       [nanoRepoScript, mediaPath],
@@ -47,9 +58,30 @@ async function transcribeLocally(
       .map((s) => s.trim())
       .filter(Boolean);
     return lines.length ? lines[lines.length - 1] : undefined;
-  } catch {
-    return undefined;
+  };
+
+  try {
+    const first = await runOnce();
+    if (first) return first;
+  } catch (err1: any) {
+    try {
+      const second = await runOnce();
+      if (second) return second;
+    } catch (err2: any) {
+      await appendFailureLog('transcribeLocally.error', {
+        mediaPath,
+        firstError: err1?.message || String(err1),
+        firstStderr: String(err1?.stderr || '').slice(-1000),
+        secondError: err2?.message || String(err2),
+        secondStderr: String(err2?.stderr || '').slice(-1000),
+        secondStdout: String(err2?.stdout || '').slice(-1000),
+      });
+      return undefined;
+    }
   }
+
+  await appendFailureLog('transcribeLocally.empty', { mediaPath });
+  return undefined;
 }
 
 async function cleanTranscript(transcript: string, cleanScript: string): Promise<string> {
@@ -200,8 +232,10 @@ function buildAgentTranscriptBody(text: string): string {
 
 function extractAudioPathFromPrompt(prompt: string): string | undefined {
   const text = String(prompt || '');
-  const m = text.match(/\/home\/yy\/\.openclaw\/media\/inbound\/[^\s\]\)"']+\.(?:ogg|opus|mp3|wav|m4a|aac|flac|mp4|webm)\b/i);
-  return m?.[0];
+  const matches = Array.from(
+    text.matchAll(/\/home\/yy\/\.openclaw\/media\/inbound\/[^\s\]\)"']+\.(?:ogg|opus|mp3|wav|m4a|aac|flac|mp4|webm)\b/gi),
+  );
+  return matches.length ? matches[matches.length - 1]?.[0] : undefined;
 }
 
 async function ensureAdaptationDir(): Promise<void> {
@@ -474,7 +508,14 @@ export default definePluginEntry({
         const llmNormalizeTimeoutMs = Number(pluginCfg?.llmNormalizeTimeoutMs || DEFAULT_LLM_TIMEOUT_MS);
 
         const transcript = await transcribeLocally(mediaPath, pythonPath, nanoRepoScript);
-        if (!transcript) return;
+        if (!transcript) {
+          await appendFailureLog('before_prompt_build.no_transcript', {
+            sessionKey,
+            mediaPath,
+            promptPreview: promptText.slice(0, 300),
+          });
+          return;
+        }
 
         const correctedTranscript = await applyCorrectionLexicon(transcript);
         const cleaned = await cleanTranscript(correctedTranscript, cleanScript);
@@ -496,7 +537,11 @@ export default definePluginEntry({
         return {
           prependContext: buildAgentTranscriptBody(suggestedText),
         };
-      } catch {
+      } catch (err: any) {
+        await appendFailureLog('before_prompt_build.error', {
+          sessionKey: String(ctx?.sessionKey || ''),
+          error: err?.message || String(err),
+        });
         return;
       }
     });
