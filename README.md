@@ -177,7 +177,6 @@ Telegram/频道语音
 
 ## 4. 快速部署
 
-这一节按“拿到仓库后尽快跑起来”的思路写，适合直接放到 GitHub。
 
 ### 4.1 前置条件
 
@@ -281,7 +280,7 @@ shanghainese-local-bridge/
           "rewriteScript": "~/.openclaw/extensions/shanghainese-local-bridge/scripts/rewrite_shanghainese_order.py",
           "llmNormalizeEnabled": true,
           "llmNormalizeTimeoutMs": 20000,
-          "debugVisibleAgents": ["main", "coder"]
+          "debugVisibleAgents": ["main"]
         }
       }
     }
@@ -302,7 +301,7 @@ shanghainese-local-bridge/
       "shanghainese-local-bridge": {
         "enabled": true,
         "config": {
-          "debugVisibleAgents": ["main", "bazi", "coder"]
+          "debugVisibleAgents": ["main"]
         }
       }
     }
@@ -315,7 +314,6 @@ shanghainese-local-bridge/
 - 不在清单里的 agent，默认静默
 - 静默模式下仍会使用插件整理后的 transcript 继续对话
 - 插件默认值是：`["main"]`
-- 当前这台机器的实际配置是：`["main", "coder"]`
 
 ### 4.8 重启 OpenClaw
 
