@@ -4,6 +4,8 @@ import { mkdir, appendFile, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
+import { prepareSimpleCompletionModelForAgent, completeWithPreparedSimpleCompletionModel } from 'openclaw/plugin-sdk/simple-completion-runtime';
+import { extractAssistantText } from 'openclaw/plugin-sdk/agent-runtime';
 
 const execFileAsync = promisify(execFile);
 const HOME_DIR = process.env.HOME || '/home/yy';
@@ -22,19 +24,9 @@ const CONFIRMED_JSONL = path.join(ADAPTATION_DIR, 'confirmed-transcripts.jsonl')
 const LEXICON_JSON = path.join(ADAPTATION_DIR, 'correction-lexicon.json');
 const COMMON_MAPPINGS_JSON = path.join(ADAPTATION_DIR, 'common-mappings.json');
 const PENDING_JSON = path.join(ADAPTATION_DIR, 'pending-confirmations.json');
-const FAILURE_LOG = path.join(ADAPTATION_DIR, 'injection-failures.log');
 
 function isAudioMediaPath(mediaPath: string): boolean {
   return /\.(ogg|opus|mp3|wav|m4a|aac|flac|mp4|webm)$/i.test(mediaPath);
-}
-
-async function appendFailureLog(kind: string, payload: Record<string, unknown>): Promise<void> {
-  try {
-    await ensureAdaptationDir();
-    await appendFile(FAILURE_LOG, `${JSON.stringify({ ts: new Date().toISOString(), kind, ...payload })}\n`, 'utf8');
-  } catch {
-    return;
-  }
 }
 
 async function transcribeLocally(
@@ -67,20 +59,11 @@ async function transcribeLocally(
     try {
       const second = await runOnce();
       if (second) return second;
-    } catch (err2: any) {
-      await appendFailureLog('transcribeLocally.error', {
-        mediaPath,
-        firstError: err1?.message || String(err1),
-        firstStderr: String(err1?.stderr || '').slice(-1000),
-        secondError: err2?.message || String(err2),
-        secondStderr: String(err2?.stderr || '').slice(-1000),
-        secondStdout: String(err2?.stdout || '').slice(-1000),
-      });
+    } catch {
       return undefined;
     }
   }
 
-  await appendFailureLog('transcribeLocally.empty', { mediaPath });
   return undefined;
 }
 
@@ -147,35 +130,45 @@ async function llmNormalizeTranscript(
   params: {
     transcript: string,
     normalizedDraft: string,
-    channelId: string,
-    from: string,
     timeoutMs: number,
-    model?: string,
+    agentId: string,
+    modelRef?: string,
   },
 ): Promise<string> {
   const cfg = api.runtime.config.loadConfig();
-  await api.runtime.agent.ensureAgentWorkspace(cfg);
-  const agentDir = api.runtime.agent.resolveAgentDir(cfg);
-  const workspaceDir = api.runtime.agent.resolveAgentWorkspaceDir(cfg);
-  const sessionId = `plugin:shanghainese-local-bridge:normalize:${params.channelId || 'unknown'}:${params.from || 'unknown'}`;
-  const result = await api.runtime.agent.runEmbeddedAgent({
-    sessionId,
-    runId: crypto.randomUUID(),
-    sessionFile: path.join(agentDir, 'sessions', 'plugin-shanghainese-local-bridge-normalize.jsonl'),
-    workspaceDir,
-    prompt: buildMandarinNormalizePrompt(params.transcript, params.normalizedDraft),
-    timeoutMs: params.timeoutMs,
-    disableTools: true,
-    bootstrapContextMode: 'lightweight',
-    trigger: 'manual',
-    ...(params.model ? { model: params.model } : {}),
+  const prepared = await prepareSimpleCompletionModelForAgent({
+    cfg,
+    agentId: params.agentId,
+    ...(params.modelRef ? { modelRef: params.modelRef } : {}),
   });
-  const text = String(
-    result?.meta?.finalAssistantVisibleText
-      || result?.payloads?.map((p: any) => p?.text || '').join('\n')
-      || '',
-  ).trim();
-  return text || params.normalizedDraft;
+  if ('error' in prepared) {
+    throw new Error(prepared.error);
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), params.timeoutMs);
+  try {
+    const message = await completeWithPreparedSimpleCompletionModel({
+      model: prepared.model,
+      auth: prepared.auth,
+      context: {
+        systemPrompt: '你是上海话语音转普通话整理器。只输出最终普通话一句，不要解释，不要补充新事实。',
+        messages: [{
+          role: 'user',
+          content: buildMandarinNormalizePrompt(params.transcript, params.normalizedDraft),
+          timestamp: Date.now(),
+        }],
+      },
+      options: {
+        maxTokens: 512,
+        signal: controller.signal,
+      },
+    });
+    const text = extractAssistantText(message as any)?.trim() || '';
+    return text || params.normalizedDraft;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 type PendingRecord = {
@@ -363,7 +356,7 @@ export default definePluginEntry({
         const cleanScript = String(pluginCfg?.cleanScript || DEFAULT_CLEAN_SCRIPT);
         const rewriteScript = String(pluginCfg?.rewriteScript || DEFAULT_REWRITE_SCRIPT);
         const llmNormalizeEnabled = pluginCfg?.llmNormalizeEnabled ?? DEFAULT_LLM_NORMALIZE_ENABLED;
-        const llmNormalizeModel = String(pluginCfg?.llmNormalizeModel || '').trim();
+        const configuredModelRef = String(pluginCfg?.llmNormalizeModel || '').trim();
         const llmNormalizeTimeoutMs = Number(pluginCfg?.llmNormalizeTimeoutMs || DEFAULT_LLM_TIMEOUT_MS);
         const debugVisibleAgents = Array.isArray(pluginCfg?.debugVisibleAgents)
           ? pluginCfg.debugVisibleAgents
@@ -393,10 +386,9 @@ export default definePluginEntry({
           ? await llmNormalizeTranscript(api, {
             transcript,
             normalizedDraft: baseSuggested,
-            channelId,
-            from,
             timeoutMs: llmNormalizeTimeoutMs,
-            ...(llmNormalizeModel ? { model: llmNormalizeModel } : {}),
+            agentId: resolveAgentIdFromSessionKey(String(event?.sessionKey || '')) || 'main',
+            ...(configuredModelRef ? { modelRef: configuredModelRef } : {}),
           })
           : '';
         const suggestedText = llmNormalized || baseSuggested;
@@ -504,16 +496,19 @@ export default definePluginEntry({
         const cleanScript = String(pluginCfg?.cleanScript || DEFAULT_CLEAN_SCRIPT);
         const rewriteScript = String(pluginCfg?.rewriteScript || DEFAULT_REWRITE_SCRIPT);
         const llmNormalizeEnabled = pluginCfg?.llmNormalizeEnabled ?? DEFAULT_LLM_NORMALIZE_ENABLED;
-        const llmNormalizeModel = String(pluginCfg?.llmNormalizeModel || '').trim();
         const llmNormalizeTimeoutMs = Number(pluginCfg?.llmNormalizeTimeoutMs || DEFAULT_LLM_TIMEOUT_MS);
+        const configuredModelRef = String(pluginCfg?.llmNormalizeModel || '').trim();
+        const runtimeProvider = String(ctx?.modelProviderId || '').trim();
+        const runtimeModel = String(ctx?.modelId || '').trim();
+        const llmNormalizeProvider = configuredModelRef.includes('/')
+          ? configuredModelRef.split('/')[0]
+          : (configuredModelRef ? '' : runtimeProvider);
+        const llmNormalizeModel = configuredModelRef.includes('/')
+          ? configuredModelRef.split('/').slice(1).join('/')
+          : (configuredModelRef || runtimeModel);
 
         const transcript = await transcribeLocally(mediaPath, pythonPath, nanoRepoScript);
         if (!transcript) {
-          await appendFailureLog('before_prompt_build.no_transcript', {
-            sessionKey,
-            mediaPath,
-            promptPreview: promptText.slice(0, 300),
-          });
           return;
         }
 
@@ -526,10 +521,9 @@ export default definePluginEntry({
           ? await llmNormalizeTranscript(api, {
             transcript,
             normalizedDraft: baseSuggested,
-            channelId,
-            from,
             timeoutMs: llmNormalizeTimeoutMs,
-            ...(llmNormalizeModel ? { model: llmNormalizeModel } : {}),
+            agentId: resolveAgentIdFromSessionKey(sessionKey) || 'main',
+            ...(configuredModelRef ? { modelRef: configuredModelRef } : {}),
           })
           : '';
         const suggestedText = llmNormalized || baseSuggested;
@@ -537,13 +531,6 @@ export default definePluginEntry({
         return {
           prependContext: buildAgentTranscriptBody(suggestedText),
         };
-      } catch (err: any) {
-        await appendFailureLog('before_prompt_build.error', {
-          sessionKey: String(ctx?.sessionKey || ''),
-          error: err?.message || String(err),
-        });
-        return;
-      }
     });
 
     api.registerHook('message:received', async (event: any) => {
