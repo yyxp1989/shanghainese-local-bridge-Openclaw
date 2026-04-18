@@ -111,11 +111,8 @@ openclaw gateway status
 ```text
 ~/.openclaw/extensions/shanghainese-local-bridge/
 ├── data/
-│   ├── common-mappings.json
-│   ├── correction-lexicon.json
-│   ├── confirmed-transcripts.jsonl
-│   ├── pending-confirmations.json
-│   └── funasr-nano-worker.log
+│   ├── README.md
+│   └── common-mappings.json
 ├── openclaw.plugin.json
 ├── package.json
 ├── scripts/
@@ -130,7 +127,11 @@ openclaw gateway status
 └── README.md
 ```
 
-当前运行时需要的脚本、映射、纠错数据和官方 Nano repo 都已收拢到插件目录下。
+说明：
+- 仓库默认跟踪插件代码、脚本、说明文档和基础映射表
+- 运行期生成的数据（如确认样本、纠偏词典、pending 状态、worker 日志）默认不纳入仓库，由 `.gitignore` 排除
+
+当前运行时需要的脚本、基础映射和官方 Nano repo 都已收拢到插件目录下。
 
 ---
 
