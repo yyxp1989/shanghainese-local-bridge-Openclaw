@@ -531,6 +531,9 @@ export default definePluginEntry({
         return {
           prependContext: buildAgentTranscriptBody(suggestedText),
         };
+      } catch {
+        return;
+      }
     });
 
     api.registerHook('message:received', async (event: any) => {
