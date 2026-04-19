@@ -508,9 +508,6 @@ export default definePluginEntry({
           : (configuredModelRef || runtimeModel);
 
         const transcript = await transcribeLocally(mediaPath, pythonPath, nanoRepoScript);
-        if (!transcript) {
-          return;
-        }
 
         const correctedTranscript = await applyCorrectionLexicon(transcript);
         const cleaned = await cleanTranscript(correctedTranscript, cleanScript);
@@ -526,9 +523,6 @@ export default definePluginEntry({
             ...(configuredModelRef ? { modelRef: configuredModelRef } : {}),
           })
           : '';
-        const suggestedText = llmNormalized || baseSuggested;
-
-        return {
           prependContext: buildAgentTranscriptBody(suggestedText),
         };
       } catch {
