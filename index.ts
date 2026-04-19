@@ -489,7 +489,29 @@ export default definePluginEntry({
         const from = sessionKey.split(':').pop() || '';
         const promptText = String(event?.prompt || '');
         const mediaPath = extractAudioPathFromPrompt(promptText);
-        if (!channelId || !from || !mediaPath || !isAudioMediaPath(mediaPath)) return;
+        
+        const traceLog = path.join(ADAPTATION_DIR, 'injection-trace.log');
+        const fs = require('fs');
+        const appendTrace = (msg: string) => {
+          try {
+            if (fs.existsSync(traceLog)) {
+              const stats = fs.statSync(traceLog);
+              if (stats.size > 100 * 1024) {
+                fs.writeFileSync(traceLog, '');
+              }
+            }
+            fs.appendFileSync(traceLog, `[${new Date().toISOString()}] ${msg}\n`);
+          } catch(e){}
+        };
+        appendTrace(`lookup for session: ${sessionKey}`);
+        appendTrace(`prompt length: ${promptText.length}`);
+        appendTrace(`extracted media: ${mediaPath}`);
+        
+        if (!channelId || !from || !mediaPath || !isAudioMediaPath(mediaPath)) {
+            appendTrace(`aborting due to missing info. channelId: ${channelId}, from: ${from}, isAudio: ${isAudioMediaPath(mediaPath || '')}`);
+            return;
+        }
+
 
         const pythonPath = String(pluginCfg?.pythonPath || DEFAULT_PYTHON);
         const nanoRepoScript = String(pluginCfg?.nanoRepoScript || DEFAULT_NANO_REPO_SCRIPT);
@@ -508,6 +530,12 @@ export default definePluginEntry({
           : (configuredModelRef || runtimeModel);
 
         const transcript = await transcribeLocally(mediaPath, pythonPath, nanoRepoScript);
+        if (!transcript) {
+          appendTrace(`transcribeLocally returned empty for ${mediaPath}`);
+          return;
+        } else {
+          appendTrace(`transcribeLocally succeeded`);
+        }
 
         const correctedTranscript = await applyCorrectionLexicon(transcript);
         const cleaned = await cleanTranscript(correctedTranscript, cleanScript);
@@ -523,6 +551,9 @@ export default definePluginEntry({
             ...(configuredModelRef ? { modelRef: configuredModelRef } : {}),
           })
           : '';
+        const suggestedText = llmNormalized || baseSuggested;
+        appendTrace(`injection complete: ${suggestedText}`);
+        return {
           prependContext: buildAgentTranscriptBody(suggestedText),
         };
       } catch {
