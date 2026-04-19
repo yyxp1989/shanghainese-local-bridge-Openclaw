@@ -280,7 +280,31 @@ openclaw gateway status
 
 如果你想关闭 debug，可将清单改成不包含当前使用的 agent，或仅保留专门调试的 agent。
 
-### 4.7 重启 OpenClaw
+### 4.7 agent 侧配套规则（建议同时配置）
+
+如果某个 agent 仍然会在收到语音后自行调用 `exec` 去跑 ASR wrapper，而不是优先消费插件注入的整理稿，建议同时在该 agent 的 `AGENTS.md` 中加入一条媒体处理硬规则。
+
+推荐规则要点：
+- 当入站消息包含 `.ogg` / `opus` / `<media:audio>` 时，若消息正文中已经有插件注入的转写文本，则应将该文本视为唯一可信输入
+- 直接基于该文本回答，不再手动调用 Whisper / faster-whisper / 本地 ASR wrapper
+- 若当前消息没有任何转写文本，则只说明“当前没有可用转写”，不要自行臆造 transcript
+- 除非用户明确要求手动转写或调试，否则不要通过 `exec` 调用：
+  - `local_asr_funasr_nano_repo.py`
+  - 其他自建 ASR 脚本
+
+可参考如下口径写入目标 agent 的 `AGENTS.md`：
+
+```md
+### Media Handling Hard Rule
+- When an inbound message contains audio media (`.ogg`, `opus`, `<media:audio>`), do **not** manually run Whisper / faster-whisper / local ASR wrappers through `exec` if the message already contains plugin-injected transcript text.
+- If plugin-injected transcript text is present, treat that text as the source of truth and respond directly from it.
+- If no transcript text is present, do not invent one. Briefly state that no transcript is available yet, unless the user explicitly asks for manual transcription.
+- Do not independently call `/home/yy/.openclaw/extensions/shanghainese-local-bridge/scripts/local_asr_funasr_nano_repo.py` from the main conversation flow unless the user explicitly asks for a manual transcription/debug action.
+```
+
+这一步不是插件运行的硬前提，但在某些已有自定义行为较强的 agent 上，能显著降低“agent 自己重跑 ASR”带来的慢响应和链路冲突。
+
+### 4.8 重启 OpenClaw
 
 插件配置更新后重启：
 
@@ -288,7 +312,7 @@ openclaw gateway status
 openclaw gateway restart
 ```
 
-### 4.8 快速自检
+### 4.9 快速自检
 
 建议用一条短语音验证：
 
